@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Season 1 Alliance Map</title>
+<style>
+:root{--bg:#14191c;--pn:#1d262b;--ink:#e8eeec;--mu:#93a4a8;--ln:#33434a}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.4 system-ui,-apple-system,Segoe UI,sans-serif}
+header{display:flex;justify-content:space-between;align-items:center;padding:10px 12px}
+h1{margin:0;font-size:17px}
+#st{font-size:12px;color:var(--mu)}#st.ok::before{content:"● ";color:#4caf70}#st.bad::before{content:"● ";color:#d9534f}
+.bar{display:flex;flex-wrap:wrap;gap:6px;padding:0 12px 8px;align-items:center}
+button,select,input{font:inherit;color:var(--ink);background:var(--pn);border:1px solid var(--ln);border-radius:6px;padding:7px 10px}
+button.on{background:var(--ink);color:var(--bg)}
+:focus-visible{outline:2px solid #5aa9ff;outline-offset:1px}
+#info{padding:0 12px 8px;color:var(--mu);font-size:13px;min-height:22px}
+#view{overflow:auto;margin:0 12px;border:1px solid var(--ln);border-radius:8px;max-height:75vh}
+#map{position:relative;container-type:inline-size;width:100%}
+#map img{display:block;width:100%;user-select:none;-webkit-user-drag:none}
+.n{position:absolute;width:2.5%;aspect-ratio:1;transform:translate(-50%,-50%);border-radius:50%;border:2px solid #fff;background:rgba(20,25,28,.55);color:#fff;font-weight:700;font-size:1.3cqw;display:flex;align-items:center;justify-content:center;cursor:pointer;text-shadow:0 0 3px #000}
+.n.c{width:4%;font-size:2cqw;border-color:#ffd24d}
+.n.own{border-color:#fff;box-shadow:0 0 0 2px rgba(0,0,0,.6)}
+.mv .n,.mv .p{touch-action:none;cursor:grab;outline:2px dashed #5aa9ff}
+.p{position:absolute;transform:translate(-50%,-100%);font-size:3.2cqw;line-height:1;cursor:pointer;filter:drop-shadow(0 1px 2px #000)}
+.panel{background:var(--pn);border:1px solid var(--ln);border-radius:8px;padding:10px;margin:10px 12px}
+.panel h2{margin:0 0 8px;font-size:15px}
+table{width:100%;border-collapse:collapse}td,th{padding:5px 4px;text-align:left;border-bottom:1px solid var(--ln);font-size:14px}th{color:var(--mu);font-size:12px}
+td input[type=color]{width:36px;height:30px;padding:1px}td input[type=text]{width:100%;min-width:80px}
+.pts{display:flex;flex-wrap:wrap;gap:8px}.pts label{font-size:12px;color:var(--mu);display:flex;flex-direction:column;gap:2px}.pts input{width:72px}
+</style>
+</head>
+<body>
+<header><h1>Season 1 Alliance Map</h1><span id="st">Connecting</span></header>
+<div class="bar" id="tools"></div>
+<div class="bar"><label for="ally" style="color:var(--mu);font-size:13px">Alliance</label><select id="ally"></select>
+<label for="zoom" style="color:var(--mu);font-size:13px;margin-left:8px">Zoom</label><input id="zoom" type="range" min="1" max="3" step="0.25" value="1"></div>
+<div id="info">Pick an alliance, then tap a city to assign it.</div>
+<div id="view"><div id="map"><img src="season1-map.jpg" alt="Season 1 map" draggable="false"></div></div>
+<div class="panel"><h2>Alliances</h2><div style="overflow-x:auto"><table id="tbl"></table></div>
+<button id="add" style="margin-top:8px">Add alliance</button></div>
+<div class="panel"><h2>Influence points per city level</h2><div class="pts" id="pts"></div>
+<p style="color:var(--mu);font-size:12px;margin:8px 0 0">Enter the real values from the game. Totals above update for everyone.</p></div>
+<div class="panel"><button id="rst">Reset moved markers to original spots</button> <button id="clr">Clear all assignments and pins</button></div>
+<script>
+const DB='https://last-war-alliance-default-rtdb.firebaseio.com/allianceMap/season1';
+const W=1290,H=1018;
+const LV={V:[1,'Village'],T:[2,'Small Town'],P:[3,'Playground'],M:[4,'Manor'],B:[5,'Bell Tower'],S:[6,'Shrine'],C:[7,'City of Apocalypse']};
+const RAW={
+V:'265,80 437,68 610,80 784,68 958,80 1132,68 1193,135 89,207 87,342 84,480 81,620 79,761 76,903 1198,272 1199,410 1202,550 1205,690 1208,833 194,950 313,950 492,940 670,950 849,940 1029,950',
+T:'320,160 435,160 553,160 782,156 902,160 204,207 203,342 201,480 199,620 197,761 1077,227 1080,362 1081,502 1085,642 1087,785 314,855 433,855 551,855 789,856 909,856',
+P:'320,250 319,388 316,572 315,713 493,228 610,227 728,227 845,227 493,785 610,785 729,785 849,785 961,272 963,410 964,548 966,690',
+M:'551,295 669,295 786,295 435,342 845,363 435,433 846,457 434,620 847,643 551,715 669,715 788,715',
+B:'729,365 552,388 489,550 788,572 610,643',
+S:'729,457 551,480 669,572',
+C:'640,505'};
+const N=[];for(const k in RAW)RAW[k].split(' ').forEach(p=>{const[a,b]=p.split(',');N.push({k,x:+a,y:+b})});
+const $=id=>document.getElementById(id);
+let S={al:{},nodes:{},pins:{},pts:{},pos:{}},cur=null,tool='assign',pend=0,last='',drag=null;
+const setSt=ok=>{$('st').className=ok?'ok':'bad';$('st').textContent=ok?'Synced':'Offline - retrying'};
+async function put(path,val){pend++;try{await fetch(DB+path+'.json',val===null?{method:'DELETE'}:{method:'PUT',body:JSON.stringify(val)});setSt(true)}catch(e){setSt(false)}pend--}
+async function pull(){
+ if(pend)return;
+ try{const r=await fetch(DB+'.json');const d=(await r.json())||{};if(pend)return;
+  if(drag)return;S={al:d.al||{},nodes:d.nodes||{},pins:d.pins||{},pts:d.pts||{},pos:d.pos||{}};
+  if(!Object.keys(S.al).length){[['Our alliance','#2e86ab'],['Ally','#3a9d5d'],['Rival','#d1495b']].forEach(([n,c],i)=>{const id='a'+i;S.al[id]={n,c};put('/al/'+id,S.al[id])})}
+  if(!S.al[cur])cur=Object.keys(S.al)[0];
+  setSt(true);const j=JSON.stringify(S);if(j!==last&&!(document.activeElement&&document.activeElement.closest('.panel'))){last=j;render()}
+ }catch(e){setSt(false)}
+}
+function render(){
+ $('tools').innerHTML='';[['assign','Assign'],['clear','Unassign'],['move','Move'],['A','⚔ Attack pin'],['D','🛡 Defend pin']].forEach(([k,l])=>{const b=document.createElement('button');b.textContent=l;b.className=tool===k?'on':'';b.onclick=()=>{tool=k;render()};$('tools').appendChild(b)});
+ $('ally').innerHTML=Object.keys(S.al).map(id=>'<option value="'+id+'">'+esc(S.al[id].n)+'</option>').join('');$('ally').value=cur;
+ let m='<img src="season1-map.jpg" alt="Season 1 map" draggable="false">';
+ N.forEach((n,i)=>{const o=S.al[S.nodes[i]];const lv=LV[n.k][0];const q=S.pos[i]||n;
+  m+='<div class="n'+(lv===7?' c':'')+(o?' own':'')+'" data-i="'+i+'" style="left:'+q.x/W*100+'%;top:'+q.y/H*100+'%;'+(o?'background:'+o.c:'')+'" title="'+LV[n.k][1]+'">'+lv+'</div>'});
+ for(const id in S.pins){const p=S.pins[id];m+='<div class="p" data-p="'+id+'" style="left:'+p.x+'%;top:'+p.y+'%" title="'+esc(p.note||'')+'">'+(p.t==='A'?'⚔':'🛡')+'</div>'}
+ $('map').innerHTML=m;$('map').classList.toggle('mv',tool==='move');$('info').textContent=tool==='move'?'Move mode: drag any city marker or pin to fix its spot. Changes save for everyone.':$('info').textContent;
+ let h='<tr><th>Colour</th><th>Name</th><th>Cities</th><th>Influence</th><th></th></tr>';
+ for(const id in S.al){let c=0,inf=0;for(const i in S.nodes)if(S.nodes[i]===id){c++;inf+=+S.pts[LV[N[i].k][0]]||0}
+  h+='<tr><td><input type="color" value="'+S.al[id].c+'" data-id="'+id+'" data-f="c" aria-label="Colour"></td><td><input type="text" value="'+esc(S.al[id].n)+'" data-id="'+id+'" data-f="n" aria-label="Name"></td><td>'+c+'</td><td><b>'+inf+'</b></td><td><button data-del="'+id+'" aria-label="Remove">✕</button></td></tr>'}
+ $('tbl').innerHTML=h;
+ $('pts').innerHTML=[1,2,3,4,5,6,7].map(l=>'<label>L'+l+'<input type="number" min="0" data-l="'+l+'" value="'+(S.pts[l]||0)+'"></label>').join('');
+}
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+$('map').addEventListener('click',e=>{
+ if(tool==='move')return;
+ const n=e.target.closest('.n'),p=e.target.closest('.p');
+ if(p){if(confirm('Remove this pin?'+(S.pins[p.dataset.p].note?'\n'+S.pins[p.dataset.p].note:''))){const id=p.dataset.p;delete S.pins[id];put('/pins/'+id,null);render()}return}
+ if(n&&(tool==='assign'||tool==='clear')){
+  const i=n.dataset.i,k=N[i].k,own=S.al[S.nodes[i]];
+  if(tool==='clear'||S.nodes[i]===cur){delete S.nodes[i];put('/nodes/'+i,null)}else{S.nodes[i]=cur;put('/nodes/'+i,cur)}
+  $('info').textContent=LV[k][1]+' (level '+LV[k][0]+') - '+(S.nodes[i]?S.al[S.nodes[i]].n:'unassigned');last='';render();return}
+ if(tool==='A'||tool==='D'){
+  const r=$('map').getBoundingClientRect();const x=+((e.clientX-r.left)/r.width*100).toFixed(2),y=+((e.clientY-r.top)/r.height*100).toFixed(2);
+  const note=prompt('Pin note (target time, who attacks, etc.)','');if(note===null)return;
+  const id='p'+Date.now().toString(36);S.pins[id]={x,y,t:tool,note};put('/pins/'+id,S.pins[id]);render()}
+});
+$('map').addEventListener('pointerdown',e=>{
+ if(tool!=='move')return;const el=e.target.closest('.n,.p');if(!el)return;
+ e.preventDefault();drag={el,r:$('map').getBoundingClientRect()};el.setPointerCapture(e.pointerId)});
+$('map').addEventListener('pointermove',e=>{
+ if(!drag)return;const r=drag.r;
+ const x=Math.min(100,Math.max(0,(e.clientX-r.left)/r.width*100)),y=Math.min(100,Math.max(0,(e.clientY-r.top)/r.height*100));
+ drag.x=x;drag.y=y;drag.el.style.left=x+'%';drag.el.style.top=y+'%'});
+function endDrag(){
+ if(!drag)return;const d=drag;drag=null;if(d.x===undefined)return;
+ if(d.el.dataset.p){const id=d.el.dataset.p;S.pins[id].x=+d.x.toFixed(2);S.pins[id].y=+d.y.toFixed(2);put('/pins/'+id,S.pins[id])}
+ else{const i=d.el.dataset.i;S.pos[i]={x:Math.round(d.x/100*W),y:Math.round(d.y/100*H)};put('/pos/'+i,S.pos[i])}
+ last=''}
+$('map').addEventListener('pointerup',endDrag);$('map').addEventListener('pointercancel',endDrag);
+$('ally').onchange=e=>{cur=e.target.value};
+$('zoom').oninput=e=>{$('map').style.width=(e.target.value*100)+'%'};
+$('add').onclick=()=>{const id='a'+Date.now().toString(36);const cs=['#e08a1e','#7b5ea7','#16a3a3','#c9a227'];S.al[id]={n:'Alliance '+(Object.keys(S.al).length+1),c:cs[Object.keys(S.al).length%cs.length]};put('/al/'+id,S.al[id]);render()};
+$('tbl').addEventListener('change',e=>{const t=e.target;if(t.dataset.f){S.al[t.dataset.id][t.dataset.f]=t.value;put('/al/'+t.dataset.id,S.al[t.dataset.id]);last='';render()}});
+$('tbl').addEventListener('click',e=>{const b=e.target.closest('[data-del]');if(!b)return;const id=b.dataset.del;if(Object.keys(S.al).length<2||!confirm('Remove '+S.al[id].n+' and its cities?'))return;
+ for(const i in S.nodes)if(S.nodes[i]===id){delete S.nodes[i];put('/nodes/'+i,null)}delete S.al[id];put('/al/'+id,null);cur=Object.keys(S.al)[0];render()});
+$('pts').addEventListener('change',e=>{const l=e.target.dataset.l;if(l){S.pts[l]=Math.max(0,+e.target.value||0);put('/pts/'+l,S.pts[l]);last='';render()}});
+$('rst').onclick=()=>{if(confirm('Put every city marker back to its original spot for everyone?')){S.pos={};put('/pos',null);render()}};
+$('clr').onclick=()=>{if(confirm('Clear every assignment and pin for everyone?')){S.nodes={};S.pins={};put('/nodes',null);put('/pins',null);render()}};
+pull();setInterval(pull,4000);
+</script>
+</body>
+</html>
